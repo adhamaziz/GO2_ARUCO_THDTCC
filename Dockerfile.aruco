@@ -1,0 +1,34 @@
+# -----------------------------------------------------------------------
+# Build the shared base first (one-time, reused by any perception container):
+#   cd ../go2_shared_base && docker build -f Dockerfile.base -t go2-ros-base:latest .
+#
+# Then build this:
+#   docker build -f Dockerfile.aruco -t go2-aruco:latest .
+FROM go2-ros-base:latest
+# -----------------------------------------------------------------------
+
+# opencv-contrib-python (not the base opencv-python) is required -- the
+# `cv2.aruco` module only ships in the "contrib" build. The base image
+# already has its own Tegra-optimized OpenCV installed; simply pip
+# installing on top of it can leave a broken mix of files from both
+# (symptom: "partially initialized module 'cv2' ... circular import" at
+# runtime). Remove every existing cv2 install first, then install clean.
+# No CUDA acceleration needed here -- ArUco detection is lightweight CPU
+# work, unlike YOLO inference.
+RUN pip3 uninstall -y opencv-python opencv-python-headless \
+      opencv-contrib-python opencv-contrib-python-headless 2>/dev/null || true && \
+    rm -rf /usr/local/lib/python3.8/dist-packages/cv2* \
+           /usr/lib/python3/dist-packages/cv2* \
+           /usr/lib/python3.8/dist-packages/cv2* 2>/dev/null || true && \
+    pip3 install --no-cache-dir --default-timeout=180 --retries 10 --force-reinstall \
+      'opencv-contrib-python==4.8.1.78' && \
+    python3 -c "import cv2; print('cv2 OK:', cv2.__version__); print('aruco module:', hasattr(cv2, 'aruco'))"
+
+WORKDIR /workspace
+COPY aruco_detector_node.py /workspace/aruco_detector_node.py
+COPY entrypoint.sh /workspace/entrypoint.sh
+RUN chmod +x /workspace/entrypoint.sh
+
+# ENTRYPOINT (not CMD) so args passed after the image name in
+# `docker run image --ros-args -p ...` APPEND instead of replacing it.
+ENTRYPOINT ["/workspace/entrypoint.sh"]
